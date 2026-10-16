@@ -1,0 +1,190 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Data Product Platform</title>
+<style>
+  :root { --bg:#f6f7f9; --card:#fff; --ink:#1c2230; --muted:#6b7385; --line:#e3e6ec; --accent:#2f5bea; --ok:#1c8c4e; --warn:#b7791f; --bad:#c0392b; }
+  * { box-sizing: border-box; }
+  body { margin:0; font-family: system-ui, sans-serif; background:var(--bg); color:var(--ink); }
+  header { background:var(--ink); color:#fff; padding:14px 24px; display:flex; justify-content:space-between; align-items:center; }
+  header h1 { font-size:18px; margin:0; }
+  main { max-width:1100px; margin:20px auto; padding:0 16px; display:grid; gap:16px; }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:10px; padding:16px; }
+  .stats { display:grid; grid-template-columns:repeat(auto-fit,minmax(160px,1fr)); gap:12px; }
+  .stat b { font-size:24px; display:block; }
+  .stat span { color:var(--muted); font-size:13px; }
+  table { width:100%; border-collapse:collapse; font-size:14px; }
+  th, td { text-align:left; padding:8px; border-bottom:1px solid var(--line); }
+  th { color:var(--muted); font-weight:600; font-size:12px; text-transform:uppercase; }
+  tr.row { cursor:pointer; } tr.row:hover { background:#f0f3fb; }
+  .badge { padding:2px 8px; border-radius:99px; font-size:12px; background:#eef0f5; }
+  .badge.published { background:#e1f5ea; color:var(--ok); }
+  .badge.deprecated { background:#fbe7e4; color:var(--bad); }
+  .badge.draft { background:#fdf1db; color:var(--warn); }
+  input, select, textarea { width:100%; padding:8px; border:1px solid var(--line); border-radius:6px; font:inherit; }
+  textarea { font-family: ui-monospace, monospace; font-size:13px; min-height:90px; }
+  label { font-size:12px; color:var(--muted); display:block; margin:8px 0 3px; }
+  .grid2 { display:grid; grid-template-columns:1fr 1fr; gap:12px; }
+  button { background:var(--accent); color:#fff; border:0; padding:8px 14px; border-radius:6px; cursor:pointer; font:inherit; }
+  button.secondary { background:#e8ebf3; color:var(--ink); }
+  .actions { display:flex; gap:8px; flex-wrap:wrap; margin-top:12px; }
+  pre { background:#f1f3f8; padding:10px; border-radius:6px; overflow:auto; font-size:12px; max-height:220px; }
+  #msg { padding:8px 12px; border-radius:6px; display:none; }
+  #msg.ok { display:block; background:#e1f5ea; color:var(--ok); }
+  #msg.bad { display:block; background:#fbe7e4; color:var(--bad); }
+  .hidden { display:none; }
+  @media (max-width:700px){ .grid2 { grid-template-columns:1fr; } }
+</style>
+</head>
+<body>
+<header>
+  <h1>Enterprise Data Product Platform</h1>
+  <button onclick="showForm()">+ New product</button>
+</header>
+<main>
+  <div id="msg"></div>
+  <section class="card stats" id="stats"></section>
+
+  <section class="card">
+    <div class="grid2">
+      <input id="search" placeholder="Search products..." oninput="load()">
+      <select id="statusFilter" onchange="load()">
+        <option value="">All statuses</option><option>draft</option><option>published</option><option>deprecated</option>
+      </select>
+    </div>
+    <table style="margin-top:10px">
+      <thead><tr><th>Name</th><th>Domain</th><th>Owner</th><th>Version</th><th>Status</th><th>Quality</th></tr></thead>
+      <tbody id="rows"></tbody>
+    </table>
+  </section>
+
+  <section class="card hidden" id="form">
+    <h3 id="formTitle">New data product</h3>
+    <div class="grid2">
+      <div><label>Name</label><input id="f_name"></div>
+      <div><label>Domain</label><input id="f_domain" placeholder="e.g. Sales"></div>
+      <div><label>Owner</label><input id="f_owner" placeholder="team or email"></div>
+      <div><label>Version</label><input id="f_version" value="0.1.0"></div>
+    </div>
+    <label>Description</label><input id="f_desc">
+    <label>Schema contract (JSON)</label>
+    <textarea id="f_schema">[{"name":"id","type":"int","nullable":false},{"name":"email","type":"string"},{"name":"amount","type":"float"}]</textarea>
+    <label>Quality rules (JSON)</label>
+    <textarea id="f_rules">[{"column":"id","type":"unique"},{"column":"amount","type":"range","min":0,"max":100000}]</textarea>
+    <div class="actions">
+      <button onclick="saveProduct()">Save</button>
+      <button class="secondary" onclick="hideForm()">Cancel</button>
+    </div>
+  </section>
+
+  <section class="card hidden" id="detail"></section>
+</main>
+
+<script>
+let current = null, editingId = null;
+const $ = id => document.getElementById(id);
+
+async function api(path, opts = {}) {
+  const res = await fetch(path, opts);
+  const body = res.status === 204 ? null : await res.json();
+  if (!res.ok) throw new Error(body?.error || res.statusText);
+  return body;
+}
+function flash(text, ok = true) {
+  const m = $('msg'); m.textContent = text; m.className = ok ? 'ok' : 'bad';
+  setTimeout(() => m.className = '', 4000);
+}
+const json = (method, data) => ({ method, headers: {'Content-Type':'application/json'}, body: JSON.stringify(data) });
+
+async function load() {
+  const q = encodeURIComponent($('search').value), s = $('statusFilter').value;
+  const [products, st] = await Promise.all([api(`/api/products?q=${q}&status=${s}`), api('/api/stats')]);
+  $('stats').innerHTML = `
+    <div class="stat"><b>${products.length}</b><span>Products shown</span></div>
+    <div class="stat"><b>${st.by_status.published || 0}</b><span>Published</span></div>
+    <div class="stat"><b>${st.by_status.draft || 0}</b><span>Drafts</span></div>
+    <div class="stat"><b>${st.avg_quality ?? '–'}</b><span>Avg quality score</span></div>`;
+  $('rows').innerHTML = products.map(p => `
+    <tr class="row" onclick="openDetail(${p.id})">
+      <td><b>${esc(p.name)}</b></td><td>${esc(p.domain)}</td><td>${esc(p.owner)}</td>
+      <td>${esc(p.version)}</td><td><span class="badge ${p.status}">${p.status}</span></td>
+      <td>${p.quality_score ?? '–'}</td></tr>`).join('') || '<tr><td colspan=6>No products yet.</td></tr>';
+}
+const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+
+function showForm(p) {
+  editingId = p?.id || null;
+  $('formTitle').textContent = p ? 'Edit data product' : 'New data product';
+  $('f_name').value = p?.name || ''; $('f_domain').value = p?.domain || '';
+  $('f_owner').value = p?.owner || ''; $('f_version').value = p?.version || '0.1.0';
+  $('f_desc').value = p?.description || '';
+  if (p) { $('f_schema').value = JSON.stringify(p.schema); $('f_rules').value = JSON.stringify(p.rules); }
+  $('form').classList.remove('hidden'); $('form').scrollIntoView({behavior:'smooth'});
+}
+function hideForm() { $('form').classList.add('hidden'); }
+
+async function saveProduct() {
+  try {
+    const data = { name:$('f_name').value, domain:$('f_domain').value, owner:$('f_owner').value,
+      version:$('f_version').value, description:$('f_desc').value,
+      schema: JSON.parse($('f_schema').value), rules: JSON.parse($('f_rules').value) };
+    const saved = editingId ? await api(`/api/products/${editingId}`, json('PUT', data))
+                            : await api('/api/products', json('POST', data));
+    hideForm(); flash('Saved'); await load(); openDetail(saved.id);
+  } catch (e) { flash(e.message, false); }
+}
+
+async function openDetail(id) {
+  current = await api(`/api/products/${id}`);
+  const [lin, hist] = await Promise.all([api(`/api/products/${id}/lineage`), api(`/api/products/${id}/quality`)]);
+  const all = await api('/api/products');
+  const opts = all.filter(p => p.id !== id).map(p => `<option value="${p.id}">${esc(p.name)}</option>`).join('');
+  const names = l => l.map(x => `${esc(x.name)} <span class="badge ${x.status}">${x.status}</span>`).join(', ') || '–';
+  $('detail').classList.remove('hidden');
+  $('detail').innerHTML = `
+    <h3>${esc(current.name)} <span class="badge ${current.status}">${current.status}</span></h3>
+    <p>${esc(current.description) || '<i>No description</i>'}</p>
+    <table><thead><tr><th>Column</th><th>Type</th><th>Nullable</th></tr></thead><tbody>
+      ${current.schema.map(c => `<tr><td>${esc(c.name)}</td><td>${c.type||'string'}</td><td>${c.nullable !== false}</td></tr>`).join('')}
+    </tbody></table>
+    <p><b>Upstream:</b> ${names(lin.upstream)}<br><b>Downstream:</b> ${names(lin.downstream)}</p>
+    <div class="grid2"><select id="upSel"><option value="">Add upstream dependency…</option>${opts}</select>
+      <button class="secondary" onclick="addUp()">Link</button></div>
+    <label>Sample data to validate (CSV with header)</label>
+    <textarea id="csv" placeholder="id,email,amount&#10;1,a@x.com,10.5&#10;1,b@x.com,-5"></textarea>
+    <div class="actions">
+      <button onclick="validate()">Run quality check</button>
+      <button class="secondary" onclick="showForm(current)">Edit</button>
+      <button class="secondary" onclick="setStatus('published')">Publish</button>
+      <button class="secondary" onclick="setStatus('deprecated')">Deprecate</button>
+      <button class="secondary" onclick="del()">Delete</button>
+    </div>
+    <pre id="result">${hist.length ? 'Recent scores: ' + hist.map(h => h.score).join(', ') : 'No quality runs yet.'}</pre>`;
+  $('detail').scrollIntoView({behavior:'smooth'});
+}
+async function validate() {
+  try {
+    const r = await api(`/api/products/${current.id}/validate`, { method:'POST', headers:{'Content-Type':'text/csv'}, body:$('csv').value });
+    $('result').textContent = JSON.stringify(r, null, 2); load();
+  } catch (e) { flash(e.message, false); }
+}
+async function setStatus(status) {
+  try { await api(`/api/products/${current.id}/status`, json('POST', {status})); flash('Status: ' + status); load(); openDetail(current.id); }
+  catch (e) { flash(e.message, false); }
+}
+async function addUp() {
+  const v = parseInt($('upSel').value); if (!v) return;
+  try { await api(`/api/products/${current.id}/lineage`, json('POST', {upstream_id: v})); openDetail(current.id); }
+  catch (e) { flash(e.message, false); }
+}
+async function del() {
+  if (!confirm('Delete this product?')) return;
+  await api(`/api/products/${current.id}`, {method:'DELETE'});
+  $('detail').classList.add('hidden'); load();
+}
+load();
+</script>
+</body>
+</html>
